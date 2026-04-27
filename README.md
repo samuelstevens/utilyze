@@ -42,6 +42,7 @@ If CUPTI 12+ is not found, `utlz` will prompt you to install the latest release 
 
 ## Usage
 
+On a Linux machine with profiling capabilities, you can:
 ```bash
 # monitor all GPUs for SOL metrics
 sudo utlz
@@ -51,6 +52,12 @@ sudo utlz --devices 0,2
 
 # show discovered inference server endpoints per GPU
 sudo utlz --endpoints
+```
+This starts a WebSocket server that listens for connections from other Utilyze processes on port 8079 by default. Further instances will automatically connect to the same server.
+
+On a macOS/Windows machine, you can connect to a running server with:
+```bash
+utlz --connect <SERVER_URL>
 ```
 
 Note that a single device ID can only be monitored by a single instance of `utlz`. This is due to the way NVIDIA's Perf SDK API handles device access.
