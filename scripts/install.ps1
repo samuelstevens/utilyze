@@ -79,6 +79,14 @@ function Add-DirectoryToUserPath {
     [Environment]::SetEnvironmentVariable('Path', ($entries -join ';'), 'User')
 }
 
+function Add-DirectoryToProcessPath {
+    param([string]$Directory)
+
+    if (-not (Test-DirectoryOnPath $Directory)) {
+        $env:PATH = "$env:PATH;$Directory"
+    }
+}
+
 $AssetName = "$BinName-windows-$Arch.exe"
 if ($Version -eq 'latest') {
     $Url = "https://github.com/systalyze/utilyze/releases/latest/download/$AssetName"
@@ -118,15 +126,11 @@ try {
     Write-Host "Installed $BinName and $AltBinName to $InstallDir ($InstalledVersion)"
 
     $InstallDirOnPath = Test-DirectoryOnPath $InstallDir
-    $CanPrompt = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not $env:UTLZ_INSTALL_WITHOUT_PATH
-    if (-not $InstallDirOnPath -and $CanPrompt) {
-        $Answer = Read-Host "Would you like to add $InstallDir to your user PATH? [y/N]"
-        if ($Answer -match '^(y|yes)$') {
-            Add-DirectoryToUserPath $InstallDir
-            $env:PATH = "$env:PATH;$InstallDir"
-            $InstallDirOnPath = $true
-            Write-Host "Added $InstallDir to your user PATH. Restart open terminals to pick up the change."
-        }
+    if (-not $InstallDirOnPath -and -not $env:UTLZ_INSTALL_WITHOUT_PATH) {
+        Add-DirectoryToUserPath $InstallDir
+        Add-DirectoryToProcessPath $InstallDir
+        $InstallDirOnPath = $true
+        Write-Host "Added $InstallDir to your user PATH and current session PATH."
     }
 
     if ($InstallDirOnPath) {

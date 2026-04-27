@@ -22,7 +22,18 @@ Utilyze is created by [Systalyze](https://systalyze.com).
 ## Installation
 
 ```bash
+# macOS/Linux
 curl -sSfL https://systalyze.com/utilyze/install.sh | sh
+
+# Windows
+iex (curl.exe -L https://systalyze.com/utilyze/install.ps1 | Out-String)
+```
+
+For macOS and Windows versions, **Utilyze acts as a client for another Utilyze process running on a remote Linux machine with profiling capabilities.** These do not require root nor any native libraries. On Windows, you may need to add an exception to executable path for Windows Defender and then reinstall Utilyze:
+
+```powershell
+Add-MpPreference -ExclusionPath <INSTALL_DIR>
+iex (curl.exe -L https://systalyze.com/utilyze/install.ps1 | Out-String)
 ```
 
 Utilyze will likely require root for profiling capabilities depending on your host configuration (see below) and will prompt you for your password during installation to install it system-wide.
