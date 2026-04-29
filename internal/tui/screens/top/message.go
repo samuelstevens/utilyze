@@ -3,7 +3,7 @@ package top
 import (
 	"time"
 
-	"github.com/systalyze/utilyze/internal/metrics"
+	"github.com/systalyze/utilyze/internal/gpu"
 )
 
 type InitMsg struct {
@@ -12,7 +12,7 @@ type InitMsg struct {
 
 type MetricsSnapshotMsg struct {
 	Timestamp time.Time
-	GPUs      []metrics.GPUSnapshot
+	GPUs      []gpu.GPUSnapshot
 }
 
 type ErrorMsg struct {

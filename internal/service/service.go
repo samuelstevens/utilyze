@@ -14,6 +14,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/systalyze/utilyze/internal/gpu"
 	"github.com/systalyze/utilyze/internal/metrics"
 )
 
@@ -35,7 +36,7 @@ const (
 type Event struct {
 	Type      EventType                  `json:"type"`
 	DeviceIDs []int                      `json:"deviceIds,omitempty"`
-	Snapshot  *metrics.MetricsSnapshot   `json:"snapshot,omitempty"`
+	Snapshot  *gpu.MetricsSnapshot       `json:"snapshot,omitempty"`
 	Ceilings  map[int]metrics.GpuCeiling `json:"ceilings,omitempty"`
 }
 
@@ -90,17 +91,33 @@ func (s *Service) Run(ctx context.Context, addr string) error {
 	return nil
 }
 
-func (s *Service) RunCollector(ctx context.Context, collector *metrics.Collector, observe func(metrics.MetricsSnapshot)) {
-	s.SetDeviceIDs(collector.MonitoredDeviceIDs())
+func (s *Service) RunCollector(ctx context.Context, collector gpu.Collector, interval time.Duration, observe func(gpu.MetricsSnapshot)) {
+	s.SetDeviceIDs(gpu.MonitoredDeviceIDs(collector.Devices()))
 
-	snapshots := make(chan metrics.MetricsSnapshot)
-	go collector.Start(ctx, snapshots)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 
-	for snapshot := range snapshots {
-		if observe != nil {
-			observe(snapshot)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			gpus, err := collector.Poll(ctx, now)
+			if err != nil {
+				continue
+			}
+			if len(gpus) == 0 {
+				continue
+			}
+			snapshot := gpu.MetricsSnapshot{
+				Timestamp: now,
+				GPUs:      gpus,
+			}
+			if observe != nil {
+				observe(snapshot)
+			}
+			s.BroadcastSnapshot(snapshot)
 		}
-		s.BroadcastSnapshot(snapshot)
 	}
 }
 
@@ -116,7 +133,7 @@ func (s *Service) SetDeviceIDs(deviceIDs []int) {
 	s.mu.Unlock()
 }
 
-func (s *Service) BroadcastSnapshot(snapshot metrics.MetricsSnapshot) {
+func (s *Service) BroadcastSnapshot(snapshot gpu.MetricsSnapshot) {
 	s.Broadcast(Event{Type: EventMetrics, Snapshot: &snapshot})
 }
 

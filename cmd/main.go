@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -19,9 +18,8 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/systalyze/utilyze/internal/config"
-	"github.com/systalyze/utilyze/internal/ffi/cupti"
-	"github.com/systalyze/utilyze/internal/ffi/nvml"
-	"github.com/systalyze/utilyze/internal/ffi/sampler"
+	"github.com/systalyze/utilyze/internal/gpu"
+	"github.com/systalyze/utilyze/internal/gpu/nvidia"
 	"github.com/systalyze/utilyze/internal/inference"
 	"github.com/systalyze/utilyze/internal/inference/vllm"
 	"github.com/systalyze/utilyze/internal/metrics"
@@ -130,24 +128,16 @@ func main() {
 }
 
 func runShowEndpoints(ctx context.Context) error {
-	nvmlClient, err := nvml.Init()
+	vendor := newGPUVendor()
+	collector, err := vendor.NewCollector(nil, 0)
 	if err != nil {
-		return fmt.Errorf("nvml: %w", err)
+		return fmt.Errorf("gpu collector: %w", err)
 	}
+	defer collector.Close()
 
-	count, err := nvmlClient.GetDeviceCount()
-	if err != nil {
-		return fmt.Errorf("nvml: %w", err)
-	}
-
-	gpus := make([]int, count)
-	for i := 0; i < count; i++ {
-		gpus[i] = i
-	}
-
-	scanner := newInferenceScanner(nvmlClient, 0)
+	scanner := newInferenceScanner(collector, 0)
 	startScan := time.Now()
-	atts, err := scanner.Scan(ctx, gpus)
+	atts, err := scanner.Scan(ctx, gpu.MonitoredDeviceIDs(collector.Devices()))
 	if err != nil {
 		return err
 	}
@@ -224,37 +214,13 @@ func serviceAddress(addr string, port string) string {
 	return service.DefaultHost + ":" + port
 }
 
-func ensureCanCollectMetrics() (bool, error) {
-	if err := cupti.EnsureLoaded(); err != nil {
-		return false, err
-	}
-	if hasCaps, _ := sampler.HasProfilingCapabilities(); hasCaps || os.Getenv("UTLZ_DISABLE_PROFILING_WARNING") == "1" {
-		return true, nil
-	}
-
-	fmt.Fprintln(os.Stderr, "Warning: GPU profiling requires CAP_SYS_ADMIN. You will likely need to run with sudo:")
-	fmt.Fprintln(os.Stderr, "  sudo utlz")
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "If you've disabled the NVIDIA profiling restriction on the host you can ignore this warning. To do so, run:")
-	fmt.Fprintln(os.Stderr, "  echo 'options nvidia NVreg_RestrictProfilingToAdminUsers=0' | sudo tee /etc/modprobe.d/nvidia-profiling.conf")
-	fmt.Fprintln(os.Stderr, "Then either reboot, or reload the driver (stops all GPU processes):")
-	fmt.Fprintln(os.Stderr, "  sudo modprobe -rf nvidia_uvm nvidia_drm nvidia_modeset nvidia && sudo modprobe nvidia")
-	fmt.Fprintln(os.Stderr, "")
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		fmt.Fprintln(os.Stderr, "To proceed anyway in non-interactive environments, set UTLZ_DISABLE_PROFILING_WARNING=1")
-		return false, nil
-	}
-
-	fmt.Fprintln(os.Stderr, "Press Enter to continue anyway, or Ctrl-C to quit.")
-	fmt.Fprintln(os.Stderr, "To skip this prompt in the future, set UTLZ_DISABLE_PROFILING_WARNING=1")
-	if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil {
-		return false, fmt.Errorf("failed to read confirmation: %w", err)
-	}
-	return true, nil
+func newGPUVendor() gpu.Vendor {
+	return nvidia.NewVendor()
 }
 
 func runServer(ctx context.Context, deviceIds []int, addr string, clientID string) error {
-	if _, err := ensureCanCollectMetrics(); err != nil {
+	vendor := newGPUVendor()
+	if err := vendor.Ready(); err != nil {
 		return err
 	}
 
@@ -263,7 +229,7 @@ func runServer(ctx context.Context, deviceIds []int, addr string, clientID strin
 	ctx, stopSignals := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stopSignals()
 
-	collector, err := metrics.NewCollector(deviceIds, metricsInterval)
+	collector, err := vendor.NewCollector(deviceIds, metricsInterval)
 	if err != nil {
 		return err
 	}
@@ -275,7 +241,7 @@ func runServer(ctx context.Context, deviceIds []int, addr string, clientID strin
 	fmt.Fprintf(os.Stderr, "  utlz --connect %s\n", connUrl)
 
 	svc := service.NewService()
-	reporter, err := newMetricsReporter(collector.NVMLClient(), collector.MonitoredDeviceIDs(), clientID, svc.ConnectedClientIDs, func(perGPU map[int]metrics.GpuCeiling) {
+	reporter, err := newMetricsReporter(collector, gpu.MonitoredDeviceIDs(collector.Devices()), clientID, svc.ConnectedClientIDs, func(perGPU map[int]metrics.GpuCeiling) {
 		svc.BroadcastCeilings(perGPU)
 	})
 	if err != nil {
@@ -286,7 +252,7 @@ func runServer(ctx context.Context, deviceIds []int, addr string, clientID strin
 		defer reporter.Stop()
 	}
 
-	go svc.RunCollector(ctx, collector, func(snapshot metrics.MetricsSnapshot) {
+	go svc.RunCollector(ctx, collector, metricsInterval, func(snapshot gpu.MetricsSnapshot) {
 		if reporter != nil {
 			reporter.Observe(snapshot)
 		}
@@ -296,19 +262,21 @@ func runServer(ctx context.Context, deviceIds []int, addr string, clientID strin
 }
 
 func runLocal(ctx context.Context, deviceIds []int, addr string, clientID string) error {
-	if _, err := ensureCanCollectMetrics(); err != nil {
+	vendor := newGPUVendor()
+	if err := vendor.Ready(); err != nil {
 		return err
 	}
 
 	svc := service.NewService()
 	return runTUI(ctx, "", func(ctx context.Context, p *tea.Program) error {
-		collector, err := metrics.NewCollector(deviceIds, metricsInterval)
+		collector, err := vendor.NewCollector(deviceIds, metricsInterval)
 		if err != nil {
 			return err
 		}
 		defer collector.Close()
 
-		reporter, err := newMetricsReporter(collector.NVMLClient(), collector.MonitoredDeviceIDs(), clientID, svc.ConnectedClientIDs, func(perGPU map[int]metrics.GpuCeiling) {
+		monitoredDeviceIDs := gpu.MonitoredDeviceIDs(collector.Devices())
+		reporter, err := newMetricsReporter(collector, monitoredDeviceIDs, clientID, svc.ConnectedClientIDs, func(perGPU map[int]metrics.GpuCeiling) {
 			svc.BroadcastCeilings(perGPU)
 			p.Send(top.RooflineCeilingMsg{PerGPU: convertCeilings(perGPU)})
 		})
@@ -326,8 +294,8 @@ func runLocal(ctx context.Context, deviceIds []int, addr string, clientID string
 			}
 		}()
 
-		p.Send(top.InitMsg{DeviceIDs: collector.MonitoredDeviceIDs()})
-		svc.RunCollector(ctx, collector, func(snapshot metrics.MetricsSnapshot) {
+		p.Send(top.InitMsg{DeviceIDs: monitoredDeviceIDs})
+		svc.RunCollector(ctx, collector, metricsInterval, func(snapshot gpu.MetricsSnapshot) {
 			if reporter != nil {
 				reporter.Observe(snapshot)
 			}
@@ -418,36 +386,49 @@ func convertCeilings(perGPU map[int]metrics.GpuCeiling) map[int]top.GpuCeiling {
 	return gpuCeilings
 }
 
-func newInferenceScanner(nvmlClient *nvml.Client, cacheTTL time.Duration) inference.Scanner {
-	if nvmlClient == nil {
+func newInferenceScanner(processes gpu.ProcessProvider, cacheTTL time.Duration) inference.Scanner {
+	if processes == nil {
 		return nil
 	}
 
 	return inference.New(
-		nvmlClient,
+		processes,
 		[]inference.Backend{vllm.NewBackend(vllmProbeTimeout)},
 		cacheTTL,
 	)
 }
 
 func newMetricsReporter(
-	nvmlClient *nvml.Client,
+	collector gpu.Collector,
 	monitoredDeviceIDs []int,
 	clientID string,
 	clientIDs func() []string,
 	onCeiling func(perGPU map[int]metrics.GpuCeiling),
 ) (*metrics.Reporter, error) {
-	totalGpuCount, err := nvmlClient.GetDeviceCount()
-	if err != nil || totalGpuCount <= 0 {
-		return nil, fmt.Errorf("could not query GPU count: %w", err)
+	if collector == nil {
+		return nil, fmt.Errorf("gpu collector is nil")
+	}
+
+	devices := collector.Devices()
+	if len(devices) == 0 {
+		return nil, errors.New("no GPUs detected")
+	}
+	totalGpuCount := 0
+	for _, device := range devices {
+		if device.ID >= totalGpuCount {
+			totalGpuCount = device.ID + 1
+		}
 	}
 
 	allNames := make([]string, totalGpuCount)
 	gpuIDs := make([]string, totalGpuCount)
-	for i := 0; i < totalGpuCount; i++ {
-		uuid, _ := nvmlClient.GetDeviceUUID(i)
-		allNames[i], _ = nvmlClient.GetDeviceName(i)
-		gpuIDs[i] = config.GenerateGpuID(uuid)
+	for _, device := range devices {
+		info, err := collector.DeviceInfo(device.ID)
+		if err != nil {
+			continue
+		}
+		allNames[device.ID] = info.Name
+		gpuIDs[device.ID] = config.GenerateGpuID(info.UUID)
 	}
 
 	return metrics.New(metrics.ReporterConfig{
@@ -456,7 +437,7 @@ func newMetricsReporter(
 		GpuIDs:             gpuIDs,
 		GpuNames:           allNames,
 		TotalGpuCount:      totalGpuCount,
-		Inference:          newInferenceScanner(nvmlClient, inferenceCacheTTL),
+		Inference:          newInferenceScanner(collector, inferenceCacheTTL),
 		MonitoredDeviceIDs: monitoredDeviceIDs,
 		OnCeiling:          onCeiling,
 	}), nil
