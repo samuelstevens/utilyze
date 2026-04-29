@@ -25,6 +25,7 @@ type Vendor struct {
 	initErr error
 }
 
+// Assert at compile time that Vendor satisfies the cross-vendor contract.
 var _ gpu.Vendor = (*Vendor)(nil)
 
 // NewVendor returns a lazily initialized NVIDIA vendor.
@@ -136,6 +137,7 @@ type Collector struct {
 	deviceIDs []int
 }
 
+// Assert at compile time that Collector satisfies the cross-vendor contract.
 var _ gpu.Collector = (*Collector)(nil)
 
 func (c *Collector) Devices() []gpu.Device {
