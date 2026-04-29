@@ -123,17 +123,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				chart.Push(memorySOLSeries, typedMsg.Timestamp, gpu.SOL.MemoryPct)
 				m.memoryLastValues[chartIdx] = newPercentValue(gpu.SOL.MemoryPct)
 			}
-			if gpu.DCGMUtilization.Valid {
-				chart.Push(smActivitySeries, typedMsg.Timestamp, gpu.DCGMUtilization.SMActivePct)
-				m.smActivityLastValues[chartIdx] = newPercentValue(gpu.DCGMUtilization.SMActivePct)
+			if gpu.CoreActivity.Valid {
+				chart.Push(smActivitySeries, typedMsg.Timestamp, gpu.CoreActivity.ActivePct)
+				m.smActivityLastValues[chartIdx] = newPercentValue(gpu.CoreActivity.ActivePct)
 			}
-			if gpu.NVMLUtilization.Valid {
-				chart.Push(grActiveSeries, typedMsg.Timestamp, gpu.NVMLUtilization.UtilPct)
-				m.grActiveLastValues[chartIdx] = newPercentValue(gpu.NVMLUtilization.UtilPct)
+			if gpu.BasicUtilization.Valid {
+				chart.Push(grActiveSeries, typedMsg.Timestamp, gpu.BasicUtilization.UtilPct)
+				m.grActiveLastValues[chartIdx] = newPercentValue(gpu.BasicUtilization.UtilPct)
 			}
 			if gpu.Bandwidth.Valid {
 				pcieBytesPerSecond += gpu.Bandwidth.PCIeTxBps + gpu.Bandwidth.PCIeRxBps
-				nvlinkBytesPerSecond += gpu.Bandwidth.NVLinkTxBps + gpu.Bandwidth.NVLinkRxBps
+				nvlinkBytesPerSecond += gpu.Bandwidth.FabricTxBps + gpu.Bandwidth.FabricRxBps
 				hasBandwidth = true
 			}
 		}

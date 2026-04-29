@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/systalyze/utilyze/internal/gpu"
 	"github.com/systalyze/utilyze/internal/inference"
 )
 
@@ -46,7 +47,7 @@ type Reporter struct {
 	config     ReporterConfig
 	scanner    inference.Scanner
 	mu         sync.Mutex
-	windowBuf  []MetricsSnapshot
+	windowBuf  []gpu.MetricsSnapshot
 	inflight   bool
 	cancelFunc context.CancelFunc
 }
@@ -68,7 +69,7 @@ func New(config ReporterConfig) *Reporter {
 	return &Reporter{config: config, scanner: config.Inference}
 }
 
-func (r *Reporter) Observe(snapshot MetricsSnapshot) {
+func (r *Reporter) Observe(snapshot gpu.MetricsSnapshot) {
 	r.mu.Lock()
 	r.windowBuf = append(r.windowBuf, snapshot)
 	r.mu.Unlock()
@@ -172,8 +173,8 @@ func (r *Reporter) tick(ctx context.Context) {
 			if gpu.Bandwidth.Valid {
 				a.pcieTxSum += gpu.Bandwidth.PCIeTxBps
 				a.pcieRxSum += gpu.Bandwidth.PCIeRxBps
-				a.nvlinkTxSum += gpu.Bandwidth.NVLinkTxBps
-				a.nvlinkRxSum += gpu.Bandwidth.NVLinkRxBps
+				a.nvlinkTxSum += gpu.Bandwidth.FabricTxBps
+				a.nvlinkRxSum += gpu.Bandwidth.FabricRxBps
 				a.bwCount++
 			}
 		}

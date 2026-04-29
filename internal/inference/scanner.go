@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/systalyze/utilyze/internal/ffi/nvml"
+	"github.com/systalyze/utilyze/internal/gpu"
 	"github.com/systalyze/utilyze/internal/inference/procfs"
 )
 
@@ -36,7 +36,7 @@ type Process struct {
 type ProcessCohort struct {
 	GPU          int
 	SessionID    int
-	GPUProcesses []nvml.ProcessInfo
+	GPUProcesses []gpu.ProcessInfo
 	Processes    []Process
 }
 
@@ -56,9 +56,9 @@ type Attribution struct {
 
 // Engine performs per-GPU attribution with caching.
 type Engine struct {
-	nvml     *nvml.Client
-	backends []Backend
-	cacheTTL time.Duration
+	processes gpu.ProcessProvider
+	backends  []Backend
+	cacheTTL  time.Duration
 
 	mu    sync.Mutex
 	cache map[int]*cachedAttribution
@@ -73,7 +73,7 @@ type sessionKey struct {
 type gpuSession struct {
 	GPU                 int
 	SessionID           int
-	GPUProcesses        []nvml.ProcessInfo
+	GPUProcesses        []gpu.ProcessInfo
 	TotalGPUMemoryBytes uint64
 	Key                 sessionKey
 }
@@ -84,16 +84,16 @@ type cachedAttribution struct {
 	key       sessionKey
 }
 
-func New(nvmlClient *nvml.Client, backends []Backend, cacheTTL time.Duration) *Engine {
-	if nvmlClient == nil {
+func New(processes gpu.ProcessProvider, backends []Backend, cacheTTL time.Duration) *Engine {
+	if processes == nil {
 		return nil
 	}
 
 	return &Engine{
-		nvml:     nvmlClient,
-		backends: backends,
-		cacheTTL: cacheTTL,
-		cache:    make(map[int]*cachedAttribution),
+		processes: processes,
+		backends:  backends,
+		cacheTTL:  cacheTTL,
+		cache:     make(map[int]*cachedAttribution),
 	}
 }
 
@@ -144,11 +144,11 @@ func (e *Engine) Scan(ctx context.Context, gpus []int) (map[int]Attribution, err
 }
 
 func (e *Engine) currentGPUSessions(gpu int) ([]gpuSession, error) {
-	if e == nil || e.nvml == nil {
-		return nil, errors.New("scanner or nvml client is nil")
+	if e == nil || e.processes == nil {
+		return nil, errors.New("scanner or gpu process provider is nil")
 	}
 
-	procs, err := e.nvml.GetComputeProcesses(gpu)
+	procs, err := e.processes.GetComputeProcesses(gpu)
 	if err != nil || len(procs) == 0 {
 		return nil, err
 	}
